@@ -280,4 +280,128 @@ class MouvementStockTest extends CommonClassTest
 		print __METHOD__." balance=".$balance."\n";
 		$this->assertEquals(2.5, $balance, 'Fractional stock balance must not be truncated to an integer');
 	}
+
+	/**
+	 * testVariantParentStockIsSumOfVariants
+	 *
+	 * @return	void
+	 */
+	public function testVariantParentStockIsSumOfVariants()
+	{
+		global $conf,$user,$langs,$db;
+		$conf = $this->savconf;
+		$user = $this->savuser;
+		$langs = $this->savlangs;
+		$db = $this->savdb;
+
+		require_once dirname(__FILE__).'/../../htdocs/variants/class/ProductCombination.class.php';
+
+		// $conf is shared by every test suite of the run, so the module and options set here are restored at the end
+		$savmodules = $conf->modules;
+		$savparentstock = getDolGlobalString('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT');
+		$savnegative = getDolGlobalString('STOCK_DISALLOW_NEGATIVE_TRANSFER');
+		$conf->modules['variants'] = 'variants';
+
+		try {
+			// A parent followed by batch, a red variant followed by batch and a blue variant without batch
+			$parent = new Product($db);
+			$parent->initAsSpecimen();
+			$parent->ref .= ' phpunit variant parent';
+			$parent->label .= ' phpunit variant parent';
+			$parent->status_batch = 1;
+			$parentid = $parent->create($user);
+			$this->assertGreaterThan(0, $parentid, 'Failed to create parent product');
+
+			$variantids = array();
+			foreach (array('red' => 1, 'blue' => 0) as $color => $status_batch) {
+				$variant = new Product($db);
+				$variant->initAsSpecimen();
+				$variant->ref .= ' phpunit variant '.$color;
+				$variant->label .= ' phpunit variant '.$color;
+				$variant->status_batch = $status_batch;
+				$variantids[$color] = $variant->create($user);
+				$this->assertGreaterThan(0, $variantids[$color], 'Failed to create variant product');
+
+				$combination = new ProductCombination($db);
+				$combination->fk_product_parent = $parentid;
+				$combination->fk_product_child = $variantids[$color];
+				$this->assertGreaterThan(0, $combination->create($user), 'Failed to link the variant to its parent');
+			}
+
+			$warehouse = new Entrepot($db);
+			$warehouse->initAsSpecimen();
+			$warehouse->label .= ' phpunit variant';
+			$warehouseid = $warehouse->create($user);
+			$this->assertGreaterThan(0, $warehouseid, 'Failed to create warehouse');
+
+			// Stock of parent is the sum of its variants: each movement of a variant is copied on its parent
+			$conf->global->VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT = '2';
+			$movement = new MouvementStock($db);
+			$this->assertGreaterThan(0, $movement->reception($user, $variantids['red'], $warehouseid, 50, 0, 'phpunit variant', '', '', 'phpunit-lot'));
+			$this->assertGreaterThan(0, $movement->reception($user, $variantids['blue'], $warehouseid, 50, 0, 'phpunit variant'));
+			$this->assertGreaterThan(0, $movement->livraison($user, $variantids['red'], $warehouseid, 10, 0, 'phpunit variant', '', '', '', 'phpunit-lot'));
+			$this->assertEquals(90, $this->getStockInWarehouse($parentid, $warehouseid), 'Stock of the parent must be the sum of its variants');
+			$this->assertEmpty($this->getBatchesInWarehouse($parentid, $warehouseid), 'The parent must receive quantities only, without batch number');
+
+			// The parent is not counted twice in the warehouse total
+			$calcproducts = $warehouse->nb_products();
+			$this->assertEquals(90, $calcproducts['nb'], 'The parent must not be counted in the warehouse total');
+			$calcproductsunique = $warehouse->nb_different_products();
+			$this->assertEquals(2, $calcproductsunique['nb'], 'The parent must not be counted in the number of products of the warehouse');
+
+			// The parent can't move by itself
+			$this->assertLessThan(0, $movement->livraison($user, $parentid, $warehouseid, 1, 0, 'phpunit variant'), 'A movement on the parent itself must be refused');
+
+			// Stock managed manually: movements of variants are not copied
+			$conf->global->VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT = '1';
+			$this->assertGreaterThan(0, $movement->reception($user, $variantids['blue'], $warehouseid, 100, 0, 'phpunit variant'));
+			$this->assertEquals(90, $this->getStockInWarehouse($parentid, $warehouseid), 'Movements of variants must not be copied when stock of parent is managed manually');
+
+			// A parent with less stock never blocks a variant, even when negative stock is not allowed
+			$conf->global->VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT = '2';
+			$conf->global->STOCK_DISALLOW_NEGATIVE_TRANSFER = '1';
+			$this->assertGreaterThan(0, $movement->livraison($user, $variantids['blue'], $warehouseid, 120, 0, 'phpunit variant'), 'A parent with less stock must not block its variant');
+			$this->assertEquals(-30, $this->getStockInWarehouse($parentid, $warehouseid));
+
+			// Recalculation sets the parent back to the sum of its variants: 40 red + 30 blue
+			$this->assertGreaterThan(0, $movement->recalculateVariantParentStocks($user), 'Failed to recalculate stock of parents');
+			$this->assertEquals(70, $this->getStockInWarehouse($parentid, $warehouseid), 'Recalculation must set the parent to the sum of its variants');
+		} finally {
+			$conf->modules = $savmodules;
+			$conf->global->VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT = $savparentstock;
+			$conf->global->STOCK_DISALLOW_NEGATIVE_TRANSFER = $savnegative;
+		}
+	}
+
+	/**
+	 * Return the stock of a product in a warehouse
+	 *
+	 * @param	int		$productid		Id of product
+	 * @param	int		$warehouseid	Id of warehouse
+	 * @return	float					Stock of the product in the warehouse
+	 */
+	private function getStockInWarehouse($productid, $warehouseid)
+	{
+		$product = new Product($this->savdb);
+		$product->fetch($productid);
+		$product->load_stock('novirtual');
+
+		return isset($product->stock_warehouse[$warehouseid]) ? (float) $product->stock_warehouse[$warehouseid]->real : 0;
+	}
+
+	/**
+	 * Return the batch details of a product in a warehouse
+	 *
+	 * @param	int		$productid		Id of product
+	 * @param	int		$warehouseid	Id of warehouse
+	 * @return	array<mixed>			Batch details of the product in the warehouse
+	 */
+	private function getBatchesInWarehouse($productid, $warehouseid)
+	{
+		$product = new Product($this->savdb);
+		$product->fetch($productid);
+		$product->load_stock('novirtual');
+
+		return isset($product->stock_warehouse[$warehouseid]->detail_batch) ? (array) $product->stock_warehouse[$warehouseid]->detail_batch : array();
+	}
 }
