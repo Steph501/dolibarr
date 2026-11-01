@@ -762,9 +762,7 @@ if ($action == 'create') {
 			$sql .= " WHERE ps.fk_product = p.rowid";
 			$sql .= " AND ps.reel <> 0"; // We do not show if stock is 0 (no product in this warehouse)
 			$sql .= " AND ps.fk_entrepot = ".((int) $object->id);
-			if (isModEnabled('variants') && getDolGlobalInt('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT') == 2) {	// Stock of variant parents is the sum of their variants, so it must not be counted twice
-				$sql .= " AND p.rowid NOT IN (SELECT pac.fk_product_parent FROM ".MAIN_DB_PREFIX."product_attribute_combination as pac WHERE pac.entity IN (".getEntity('product')."))";
-			}
+			$sql .= Entrepot::getSqlFilterExcludingVariantParents('p.rowid');
 
 			$parameters = array('context' => 'warehousecard');
 			$reshook = $hookmanager->executeHooks('printFieldListWhere', $parameters); // Note that $action and $object may have been modified by hook

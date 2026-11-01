@@ -673,6 +673,22 @@ class Entrepot extends CommonObject
 		return $liste;
 	}
 
+	/**
+	 * Return the SQL filter that excludes the variant parents from the stock of warehouses when the stock of a parent is the sum of its variants,
+	 * so that parents are not counted twice.
+	 *
+	 * @param	string	$fieldproductid		Field of the SQL request that contains the id of the product (for example 'p.rowid')
+	 * @return	string						SQL filter starting with ' AND', or '' when parents must be counted
+	 */
+	public static function getSqlFilterExcludingVariantParents($fieldproductid)
+	{
+		if (!isModEnabled('variants') || getDolGlobalInt('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT') != 2) {
+			return '';
+		}
+
+		return " AND ".$fieldproductid." NOT IN (SELECT pac.fk_product_parent FROM ".MAIN_DB_PREFIX."product_attribute_combination as pac WHERE pac.entity IN (".getEntity('product')."))";
+	}
+
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
 	 *	Return number of unique different product into a warehouse
@@ -689,9 +705,7 @@ class Entrepot extends CommonObject
 		$sql .= ", ".$this->db->prefix()."product as p";
 		$sql .= " WHERE ps.fk_entrepot = ".((int) $this->id);
 		$sql .= " AND ps.fk_product = p.rowid";
-		if (isModEnabled('variants') && getDolGlobalInt('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT') == 2) {	// Stock of variant parents is the sum of their variants, so it must not be counted twice
-			$sql .= " AND p.rowid NOT IN (SELECT pac.fk_product_parent FROM ".$this->db->prefix()."product_attribute_combination as pac WHERE pac.entity IN (".getEntity('product')."))";
-		}
+		$sql .= self::getSqlFilterExcludingVariantParents('p.rowid');
 
 		//print $sql;
 		$result = $this->db->query($sql);
@@ -742,9 +756,7 @@ class Entrepot extends CommonObject
 		}
 		$sql .= " WHERE ps.fk_entrepot = ".((int) $this->id);
 		$sql .= " AND ps.fk_product = p.rowid";
-		if (isModEnabled('variants') && getDolGlobalInt('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT') == 2) {	// Stock of variant parents is the sum of their variants, so it must not be counted twice
-			$sql .= " AND p.rowid NOT IN (SELECT pac.fk_product_parent FROM ".$this->db->prefix()."product_attribute_combination as pac WHERE pac.entity IN (".getEntity('product')."))";
-		}
+		$sql .= self::getSqlFilterExcludingVariantParents('p.rowid');
 		//print $sql;
 		$result = $this->db->query($sql);
 		if ($result) {

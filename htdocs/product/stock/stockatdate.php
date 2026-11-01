@@ -319,9 +319,7 @@ if ($productid > 0) {
 if (!getDolGlobalString('STOCK_SUPPORTS_SERVICES')) {
 	$sql .= " AND p.fk_product_type = 0";
 }
-if (isModEnabled('variants') && getDolGlobalInt('VARIANT_ALLOW_STOCK_MOVEMENT_ON_VARIANT_PARENT') == 2) {	// Stock of variant parents is the sum of their variants, so it must not be counted twice
-	$sql .= " AND p.rowid NOT IN (SELECT pac.fk_product_parent FROM ".MAIN_DB_PREFIX."product_attribute_combination as pac WHERE pac.entity IN (".getEntity('product')."))";
-}
+$sql .= Entrepot::getSqlFilterExcludingVariantParents('p.rowid');
 if ($search_ref) {
 	$sql .= natural_search('p.ref', $search_ref);
 }
